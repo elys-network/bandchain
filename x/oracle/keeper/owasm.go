@@ -79,15 +79,9 @@ func (k Keeper) PrepareRequest(
 	// Consume gas for data requests.
 	ctx.GasMeter().ConsumeGas(askCount*k.PerValidatorRequestGas(ctx), "PER_VALIDATOR_REQUEST_FEE")
 
-	// Get a random validator set to perform this request.
-	validators, err := k.GetRandomValidators(ctx, int(askCount), k.GetRequestCount(ctx)+1)
-	if err != nil {
-		return 0, err
-	}
-
 	// Create a request object. Note that RawRequestIDs will be populated after preparation is done.
 	req := types.NewRequest(
-		r.GetOracleScriptID(), r.GetCalldata(), validators, r.GetMinCount(),
+		r.GetOracleScriptID(), r.GetCalldata(), []sdk.ValAddress{}, r.GetMinCount(),
 		ctx.BlockHeight(), ctx.BlockTime(), r.GetClientID(), nil, ibcChannel, r.GetExecuteGas(),
 	)
 
@@ -98,30 +92,13 @@ func (k Keeper) PrepareRequest(
 		int64(k.MaxRawRequestCount(ctx)),
 		int64(k.GetSpanSize(ctx)),
 	)
-	script, err := k.GetOracleScript(ctx, req.OracleScriptID)
-	if err != nil {
-		return 0, err
-	}
 
 	// Consume fee and execute owasm code
 	ctx.GasMeter().ConsumeGas(k.BaseOwasmGas(ctx), "BASE_OWASM_FEE")
 	ctx.GasMeter().ConsumeGas(r.GetPrepareGas(), "OWASM_PREPARE_FEE")
-	code := k.GetFile(script.Filename)
-	output, err := k.owasmVM.Prepare(code, ConvertToOwasmGas(r.GetPrepareGas()), env)
-	if err != nil {
-		return 0, sdkerrors.Wrapf(types.ErrBadWasmExecution, err.Error())
-	}
 
 	// Preparation complete! It's time to collect raw request ids.
 	req.RawRequests = env.GetRawRequests()
-	if len(req.RawRequests) == 0 {
-		return 0, types.ErrEmptyRawRequests
-	}
-	// Collect ds fee
-	totalFees, err := k.CollectFee(ctx, feePayer, r.GetFeeLimit(), askCount, req.RawRequests)
-	if err != nil {
-		return 0, err
-	}
 	// We now have everything we need to the request, so let's add it to the store.
 	id := k.AddRequest(ctx, req)
 
@@ -134,8 +111,6 @@ func (k Keeper) PrepareRequest(
 		sdk.NewAttribute(types.AttributeKeyCalldata, hex.EncodeToString(req.Calldata)),
 		sdk.NewAttribute(types.AttributeKeyAskCount, fmt.Sprintf("%d", askCount)),
 		sdk.NewAttribute(types.AttributeKeyMinCount, fmt.Sprintf("%d", req.MinCount)),
-		sdk.NewAttribute(types.AttributeKeyGasUsed, fmt.Sprintf("%d", output.GasUsed)),
-		sdk.NewAttribute(types.AttributeKeyTotalFees, totalFees.String()),
 	)
 	for _, val := range req.RequestedValidators {
 		event = event.AppendAttributes(sdk.NewAttribute(types.AttributeKeyValidator, val))
